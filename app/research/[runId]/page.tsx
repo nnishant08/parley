@@ -5,15 +5,41 @@ import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 import { ArrowLeft } from "lucide-react";
 import { ModelCard } from "@/components/ModelCard";
-import { researchClaude } from "@/lib/providers/anthropic";
-import { useKeyStore, useRunStore, type ProviderRun } from "@/lib/store";
-import type { Provider } from "@/lib/types";
+import { researchClaude, type RunEvent } from "@/lib/providers/anthropic";
+import { researchMistral } from "@/lib/providers/mistral";
+import {
+  useKeyStore,
+  useRunStore,
+  type ProviderRun,
+} from "@/lib/store";
+import { PROVIDERS, PROVIDER_LABEL, type Provider } from "@/lib/types";
 
 const EMPTY_RUN: ProviderRun = {
   status: "idle",
   markdown: "",
   sources: [],
   searchQueries: [],
+};
+
+type Runner = (args: {
+  question: string;
+  apiKey: string;
+  contextDocs?: { name: string; text: string }[];
+  onEvent: (e: RunEvent) => void;
+}) => Promise<void>;
+
+// Which providers have a real runner wired up. Steps 5 (openai) and 6
+// (gemini) will fill in the remaining slots; until then those cards
+// render as placeholders below.
+const RUNNERS: Partial<Record<Provider, Runner>> = {
+  anthropic: researchClaude,
+  mistral: researchMistral,
+};
+
+const APPROXIMATED: Partial<Record<Provider, boolean>> = {
+  // Mistral has no Deep Research API; spec calls this out as
+  // "approximated" and asked us to label the card.
+  mistral: true,
 };
 
 export default function RunPage() {
@@ -31,8 +57,8 @@ export default function RunPage() {
   }, [hydrate]);
 
   // Redirect home if we lost the run state (e.g. user pasted a URL).
-  // Only watch hydrated + run.id (not the whole run object) so this
-  // effect doesn't re-fire on every state update.
+  // Subscribe only to run.id, not the whole run object, so this effect
+  // doesn't re-fire on every state update.
   const runIdActual = run?.id;
   useEffect(() => {
     if (!hydrated) return;
@@ -42,74 +68,67 @@ export default function RunPage() {
     }
   }, [hydrated, runIdActual, runId, router]);
 
-  // Kick off Claude exactly once per (runId, apiKey) pair.
+  // Kick off all wired-up providers exactly once per (runId, keys) pair.
   //
-  // Two subtle traps live here, both fixed by the current shape:
+  // Two subtle traps that bit me on step 3, both still relevant here:
   //
-  //  1. Don't subscribe to `run` in the deps. The effect itself calls
-  //     markLaunched/initProvider/setStatus which mutate `run`, so the
-  //     effect would re-fire mid-fetch and the cleanup would abort the
-  //     in-flight request. We read the fresh run via getState() instead.
+  //  1. Don't put `run` in the deps. The effect mutates run via
+  //     markLaunched/initProvider/setStatus, which would re-fire the
+  //     effect. We read the fresh run via getState() inside instead.
   //
-  //  2. Don't abort the fetch from the effect's cleanup. React strict
-  //     mode (dev only) runs setup → cleanup → setup on every mount; if
-  //     the cleanup aborts the fetch and markLaunched then blocks the
-  //     re-launch, every dev request dies in the first millisecond.
-  //     The fetch runs to completion regardless of unmount; the onEvent
-  //     dispatcher drops events if the user has navigated to a different
-  //     runId in the meantime. Proper cancellation will land in step 15.
-  const apiKey = keys?.anthropic;
+  //  2. Don't abort the fetch from cleanup. React strict mode runs
+  //     setup → cleanup → setup in dev; the cleanup would abort the
+  //     in-flight fetch and markLaunched would block the re-launch.
+  //     Fetches run to completion; onEvent drops events if the user
+  //     has navigated to a different runId. Step 15 will replace this
+  //     with a ref-tracked controller that survives strict mode.
   useEffect(() => {
-    if (!runId || !apiKey) return;
+    if (!runId || !keys) return;
     const cur = useRunStore.getState().current;
     if (!cur || cur.id !== runId) return;
 
-    const {
-      markLaunched,
-      initProvider,
-      setStatus,
-      appendMarkdown,
-      appendSources,
-      appendSearchQuery,
-      setError,
-    } = useRunStore.getState();
-
-    if (!markLaunched("anthropic")) return;
-
-    initProvider("anthropic");
-    setStatus("anthropic", "planning");
-
+    const store = useRunStore.getState();
     const startedForRunId = runId;
     const isStillCurrent = () =>
       useRunStore.getState().current?.id === startedForRunId;
 
-    void researchClaude({
-      question: cur.question,
-      apiKey,
-      contextDocs: cur.contextDocs,
-      // intentionally no AbortSignal — see comment block above
-      onEvent: (e) => {
-        if (!isStillCurrent()) return;
-        switch (e.type) {
-          case "status":
-            if (e.status) setStatus("anthropic", e.status, e.detail);
-            break;
-          case "text_delta":
-            if (e.textDelta) appendMarkdown("anthropic", e.textDelta);
-            break;
-          case "search_query":
-            if (e.query) appendSearchQuery("anthropic", e.query);
-            break;
-          case "search_results":
-            if (e.sources?.length) appendSources("anthropic", e.sources);
-            break;
-          case "error":
-            if (e.error) setError("anthropic", e.error);
-            break;
-        }
-      },
-    });
-  }, [runId, apiKey]);
+    for (const provider of PROVIDERS) {
+      const runner = RUNNERS[provider];
+      const apiKey = keys[provider];
+      if (!runner || !apiKey) continue;
+      if (!store.markLaunched(provider)) continue;
+
+      store.initProvider(provider);
+      store.setStatus(provider, "planning");
+
+      void runner({
+        question: cur.question,
+        apiKey,
+        contextDocs: cur.contextDocs,
+        onEvent: (e) => {
+          if (!isStillCurrent()) return;
+          const s = useRunStore.getState();
+          switch (e.type) {
+            case "status":
+              if (e.status) s.setStatus(provider, e.status, e.detail);
+              break;
+            case "text_delta":
+              if (e.textDelta) s.appendMarkdown(provider, e.textDelta);
+              break;
+            case "search_query":
+              if (e.query) s.appendSearchQuery(provider, e.query);
+              break;
+            case "search_results":
+              if (e.sources?.length) s.appendSources(provider, e.sources);
+              break;
+            case "error":
+              if (e.error) s.setError(provider, e.error);
+              break;
+          }
+        },
+      });
+    }
+  }, [runId, keys]);
 
   if (!hydrated) {
     return (
@@ -126,11 +145,6 @@ export default function RunPage() {
       </main>
     );
   }
-
-  const claudeRun = run.providers.anthropic ?? EMPTY_RUN;
-
-  // Step 3 only shows the Claude card. Steps 4–6 will fill in the others.
-  const placeholders: Provider[] = ["mistral", "openai", "gemini"];
 
   return (
     <main className="container mx-auto max-w-5xl px-6 py-10">
@@ -154,18 +168,30 @@ export default function RunPage() {
       </header>
 
       <div className="grid gap-4 md:grid-cols-2">
-        <ModelCard provider="anthropic" run={claudeRun} />
-        {placeholders.map((p) => (
-          <section
-            key={p}
-            className="rounded-lg border border-dashed border-border bg-card/40 p-5 text-xs text-muted-foreground"
-          >
-            <div className="font-semibold uppercase tracking-wider">
-              {p}
-            </div>
-            <p className="mt-2">Coming online in steps 4–6.</p>
-          </section>
-        ))}
+        {PROVIDERS.map((p) => {
+          const wired = !!RUNNERS[p];
+          if (!wired) {
+            return (
+              <section
+                key={p}
+                className="rounded-lg border border-dashed border-border bg-card/40 p-5 text-xs text-muted-foreground"
+              >
+                <div className="font-semibold uppercase tracking-wider">
+                  {PROVIDER_LABEL[p]}
+                </div>
+                <p className="mt-2">Coming online soon.</p>
+              </section>
+            );
+          }
+          return (
+            <ModelCard
+              key={p}
+              provider={p}
+              run={run.providers[p] ?? EMPTY_RUN}
+              approximated={APPROXIMATED[p]}
+            />
+          );
+        })}
       </div>
     </main>
   );
