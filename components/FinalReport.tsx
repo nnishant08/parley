@@ -6,7 +6,9 @@ import {
   Loader2,
   ScrollText,
   ExternalLink,
+  RotateCcw,
 } from "lucide-react";
+import { Button } from "@/components/ui/button";
 import { Markdown } from "@/components/Markdown";
 import type { ProviderRun, SynthesisState } from "@/lib/store";
 import { PROVIDER_LABEL, PROVIDERS, type Provider } from "@/lib/types";
@@ -22,11 +24,19 @@ const ACCENT_DOT: Record<Provider, string> = {
 export function FinalReport({
   state,
   providers,
+  onRetry,
 }: {
   state: SynthesisState;
   providers: Partial<Record<Provider, ProviderRun>>;
+  onRetry?: () => void;
 }) {
   const { status, markdown, error, synthesizer } = state;
+  // Show retry when synthesis stalled (idle for too long after stage 2 fired
+  // is hard to detect from props alone; we show retry whenever the user
+  // could plausibly need it: failed, or stuck-idle/writing with no markdown).
+  const canRetry =
+    !!onRetry &&
+    (status === "failed" || (status !== "done" && markdown.length === 0));
 
   return (
     <section className="mt-10 rounded-lg border border-border bg-card">
@@ -40,7 +50,14 @@ export function FinalReport({
             </span>
           )}
         </div>
-        <StatusPill status={status} />
+        <div className="flex items-center gap-2">
+          {canRetry && (
+            <Button size="sm" variant="outline" onClick={onRetry}>
+              <RotateCcw className="h-3.5 w-3.5" /> Retry synthesis
+            </Button>
+          )}
+          <StatusPill status={status} />
+        </div>
       </header>
 
       <div className="px-6 py-5">

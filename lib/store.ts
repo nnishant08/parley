@@ -156,6 +156,7 @@ interface RunStoreState {
   markSynthesisLaunched: (synthesizer: Provider) => boolean;
   setSynthesisStatus: (status: SynthesisStatus, error?: string) => void;
   appendSynthesisMarkdown: (delta: string) => void;
+  resetSynthesis: () => void;
 }
 
 function patchProvider(
@@ -368,6 +369,18 @@ export const useRunStore = create<RunStoreState>((set, get) => ({
           ...cur.synthesis,
           markdown: cur.synthesis.markdown + delta,
         },
+      },
+    });
+  },
+
+  resetSynthesis: () => {
+    const cur = get().current;
+    if (!cur) return;
+    set({
+      current: {
+        ...cur,
+        synthesisLaunched: false,
+        synthesis: { status: "idle", markdown: "" },
       },
     });
   },

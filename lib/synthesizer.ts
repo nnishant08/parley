@@ -50,9 +50,14 @@ export function streamChat(args: Args): ReadableStream<Uint8Array> {
 // Anthropic — pipe upstream SSE through with no translation
 // ──────────────────────────────────────────────────────────
 function streamAnthropic(args: Args): ReadableStream<Uint8Array> {
+  const t0 = Date.now();
   return new ReadableStream<Uint8Array>({
     async start(controller) {
       try {
+        // eslint-disable-next-line no-console
+        console.log(
+          `[synth/anthropic] POST upstream — input ${args.userMessage.length.toLocaleString()} chars`,
+        );
         const upstream = await fetch(
           "https://api.anthropic.com/v1/messages",
           {
@@ -73,20 +78,46 @@ function streamAnthropic(args: Args): ReadableStream<Uint8Array> {
             signal: args.signal,
           },
         );
+        // eslint-disable-next-line no-console
+        console.log(
+          `[synth/anthropic] upstream responded ${upstream.status} after ${Date.now() - t0}ms`,
+        );
         if (!upstream.ok || !upstream.body) {
           const text = await upstream.text().catch(() => "");
+          // eslint-disable-next-line no-console
+          console.error(
+            `[synth/anthropic] non-OK from upstream: ${text.slice(0, 200)}`,
+          );
           controller.enqueue(sseError(`Anthropic ${upstream.status}: ${text.slice(0, 300)}`));
           controller.close();
           return;
         }
         const reader = upstream.body.getReader();
+        let chunkCount = 0;
+        let totalBytes = 0;
         while (true) {
           const { value, done } = await reader.read();
           if (done) break;
-          if (value) controller.enqueue(value);
+          if (value) {
+            chunkCount++;
+            totalBytes += value.byteLength;
+            if (chunkCount === 1) {
+              // eslint-disable-next-line no-console
+              console.log(
+                `[synth/anthropic] first chunk @ ${Date.now() - t0}ms (${value.byteLength} bytes)`,
+              );
+            }
+            controller.enqueue(value);
+          }
         }
+        // eslint-disable-next-line no-console
+        console.log(
+          `[synth/anthropic] stream done — ${chunkCount} chunks, ${totalBytes} bytes, ${Date.now() - t0}ms`,
+        );
         controller.close();
       } catch (e) {
+        // eslint-disable-next-line no-console
+        console.error("[synth/anthropic] stream error:", e);
         controller.enqueue(
           sseError(e instanceof Error ? e.message : "Anthropic stream failed"),
         );
