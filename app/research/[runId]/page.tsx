@@ -12,6 +12,7 @@ import { researchGemini } from "@/lib/providers/gemini";
 import { runCritique, eligibleProviders } from "@/lib/providers/critique";
 import { runSynthesis } from "@/lib/providers/synthesis";
 import { FinalReport } from "@/components/FinalReport";
+import { ExportButtons } from "@/components/ExportButtons";
 import {
   useKeyStore,
   useRunStore,
@@ -341,6 +342,7 @@ export default function RunPage() {
       </div>
 
       <FinalReport state={run.synthesis} providers={run.providers} />
+      <ExportButtons run={run} />
     </main>
   );
 }
