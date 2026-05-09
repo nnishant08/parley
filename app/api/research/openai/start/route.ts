@@ -5,8 +5,12 @@ import { RESEARCH_SYSTEM_PROMPT } from "@/lib/prompts/research-system";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-const DEFAULT_MODEL = "o3-deep-research-2025-06-26";
-const ALT_MODEL = "o4-mini-deep-research-2025-06-26";
+// Switched default to o4-mini per user preference: ~$1.50/run vs ~$4/run
+// for o3, with deep-research depth that's still substantially better than
+// the streaming-w/-web-search alternative. Pass tier="o3" to get the
+// pricier high-quality model.
+const DEFAULT_MODEL = "o4-mini-deep-research-2025-06-26";
+const O3_MODEL = "o3-deep-research-2025-06-26";
 
 interface Body {
   question: string;
@@ -45,7 +49,7 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  const model = tier === "o4-mini" ? ALT_MODEL : DEFAULT_MODEL;
+  const model = tier === "o3" ? O3_MODEL : DEFAULT_MODEL;
   // Bump retries from the SDK default of 2 → 10. Deep-research orgs
   // routinely hit transient TPM caps (each call counts ~30k tokens
   // against the per-minute limit, default 200k); the SDK honors the

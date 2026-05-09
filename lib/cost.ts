@@ -22,7 +22,9 @@ import { PROVIDERS, type Provider } from "@/lib/types";
 export const STAGE1_COST: Record<Provider, number> = {
   anthropic: 0.5,
   mistral: 0.3,
-  openai: 4.0, // o3 default; o4-mini is ~1.5
+  // o4-mini-deep-research is now the default (~$1.5/run). o3 is
+  // still available via tier="o3" and runs ~$4/run.
+  openai: 1.5,
   gemini: 2.0, // preview default; max is ~5
 };
 export const CRITIQUE_COST_PER_PROVIDER = 0.2;
