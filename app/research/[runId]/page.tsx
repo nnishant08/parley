@@ -7,6 +7,7 @@ import { ArrowLeft } from "lucide-react";
 import { ModelCard } from "@/components/ModelCard";
 import { researchClaude, type RunEvent } from "@/lib/providers/anthropic";
 import { researchMistral } from "@/lib/providers/mistral";
+import { researchOpenAI } from "@/lib/providers/openai";
 import {
   useKeyStore,
   useRunStore,
@@ -34,6 +35,7 @@ type Runner = (args: {
 const RUNNERS: Partial<Record<Provider, Runner>> = {
   anthropic: researchClaude,
   mistral: researchMistral,
+  openai: researchOpenAI,
 };
 
 const APPROXIMATED: Partial<Record<Provider, boolean>> = {
