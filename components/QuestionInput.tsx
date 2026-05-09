@@ -5,6 +5,7 @@ import { useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { useRunStore } from "@/lib/store";
+import { PROVIDERS, PROVIDER_LABEL, type Provider } from "@/lib/types";
 import {
   ArrowRight,
   Loader2,
@@ -38,6 +39,7 @@ export function QuestionInput() {
   const [attachments, setAttachments] = useState<AttachedDoc[]>([]);
   const [uploading, setUploading] = useState(false);
   const [uploadError, setUploadError] = useState<string | null>(null);
+  const [synthesizer, setSynthesizer] = useState<Provider>("anthropic");
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   function submit() {
@@ -52,7 +54,12 @@ export function QuestionInput() {
       name: a.name,
       text: a.text,
     }));
-    startRun(runId, q, contextDocs.length ? contextDocs : undefined);
+    startRun(
+      runId,
+      q,
+      contextDocs.length ? contextDocs : undefined,
+      synthesizer,
+    );
     router.push(`/research/${runId}`);
   }
 
@@ -144,6 +151,28 @@ export function QuestionInput() {
           <AlertTriangle className="h-3 w-3" /> {uploadError}
         </p>
       )}
+
+      <div className="mt-4 flex flex-wrap items-center gap-2 border-t border-border pt-3">
+        <span className="text-xs text-muted-foreground">Synthesizer:</span>
+        {PROVIDERS.map((p) => (
+          <button
+            key={p}
+            type="button"
+            onClick={() => setSynthesizer(p)}
+            className={cn(
+              "rounded-full border px-3 py-1 text-xs transition-colors",
+              synthesizer === p
+                ? "border-foreground bg-foreground text-background"
+                : "border-border text-muted-foreground hover:bg-accent hover:text-foreground",
+            )}
+          >
+            {PROVIDER_LABEL[p]}
+          </button>
+        ))}
+        <span className="text-xs text-muted-foreground">
+          (writes the final report; default Claude)
+        </span>
+      </div>
 
       <div className="mt-3 flex flex-wrap items-center gap-2">
         <span className="text-xs text-muted-foreground">Try:</span>

@@ -1,4 +1,5 @@
 import { NextRequest } from "next/server";
+import { streamChat } from "@/lib/synthesizer";
 import type { Provider } from "@/lib/types";
 
 export const runtime = "nodejs";
@@ -15,10 +16,6 @@ interface Body {
   apiKey: string;
 }
 
-const ANTHROPIC_URL = "https://api.anthropic.com/v1/messages";
-const ANTHROPIC_VERSION = "2023-06-01";
-const MODEL = "claude-opus-4-7";
-
 export async function POST(req: NextRequest) {
   let body: Body;
   try {
@@ -27,17 +24,8 @@ export async function POST(req: NextRequest) {
     return new Response("Invalid JSON body", { status: 400 });
   }
   const { followup, originalQuestion, finalReport, synthesizer, apiKey } = body;
-  if (!followup || !apiKey || !finalReport) {
+  if (!followup || !apiKey || !finalReport || !synthesizer) {
     return new Response("Missing fields", { status: 400 });
-  }
-
-  // Step 12 hardcodes Anthropic — same shape as synthesize. Step 14
-  // generalizes both to the user-picked synthesizer.
-  if (synthesizer !== "anthropic") {
-    return new Response(
-      `Followup against ${synthesizer} not implemented yet (step 14)`,
-      { status: 501 },
-    );
   }
 
   const userMsg = [
@@ -50,58 +38,13 @@ export async function POST(req: NextRequest) {
     `Follow-up: ${followup}`,
   ].join("\n");
 
-  let upstream: Response;
-  try {
-    upstream = await fetch(ANTHROPIC_URL, {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-        accept: "text/event-stream",
-        "x-api-key": apiKey,
-        "anthropic-version": ANTHROPIC_VERSION,
-      },
-      body: JSON.stringify({
-        model: MODEL,
-        max_tokens: 4096,
-        system: FOLLOWUP_SYSTEM_PROMPT,
-        messages: [{ role: "user", content: userMsg }],
-        stream: true,
-      }),
-      signal: req.signal,
-    });
-  } catch (e) {
-    return new Response(
-      e instanceof Error ? e.message : "Upstream fetch failed",
-      { status: 502 },
-    );
-  }
-
-  if (!upstream.ok || !upstream.body) {
-    const text = await upstream.text().catch(() => "");
-    return new Response(text || `HTTP ${upstream.status}`, {
-      status: upstream.status,
-      headers: { "content-type": "text/plain" },
-    });
-  }
-
-  // Pipe SSE through unchanged — same pattern as synthesize.
-  const reader = upstream.body.getReader();
-  const stream = new ReadableStream<Uint8Array>({
-    async start(controller) {
-      try {
-        while (true) {
-          const { value, done } = await reader.read();
-          if (done) break;
-          if (value) controller.enqueue(value);
-        }
-        controller.close();
-      } catch (e) {
-        controller.error(e);
-      }
-    },
-    cancel() {
-      reader.cancel().catch(() => {});
-    },
+  const stream = streamChat({
+    provider: synthesizer,
+    apiKey,
+    systemPrompt: FOLLOWUP_SYSTEM_PROMPT,
+    userMessage: userMsg,
+    maxTokens: 4096,
+    signal: req.signal,
   });
 
   return new Response(stream, {

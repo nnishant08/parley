@@ -113,6 +113,7 @@ export interface ResearchRun {
   id: string;
   question: string;
   contextDocs?: { name: string; text: string }[];
+  synthesizerProvider: Provider;
   startedAt: number;
   providers: Partial<Record<Provider, ProviderRun>>;
   // Track which providers have been kicked off so React Strict Mode's double-effect
@@ -134,6 +135,7 @@ interface RunStoreState {
     id: string,
     question: string,
     contextDocs?: { name: string; text: string }[],
+    synthesizerProvider?: Provider,
   ) => void;
   reset: () => void;
 
@@ -168,12 +170,13 @@ function patchProvider(
 export const useRunStore = create<RunStoreState>((set, get) => ({
   current: null,
 
-  startRun: (id, question, contextDocs) => {
+  startRun: (id, question, contextDocs, synthesizerProvider) => {
     set({
       current: {
         id,
         question,
         contextDocs,
+        synthesizerProvider: synthesizerProvider ?? "anthropic",
         startedAt: Date.now(),
         providers: {},
         launched: {},

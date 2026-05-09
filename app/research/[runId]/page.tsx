@@ -254,7 +254,7 @@ export default function RunPage() {
     }
     if (reports.length === 0) return;
 
-    const synthesizer: Provider = "anthropic"; // step 14 picker
+    const synthesizer: Provider = cur.synthesizerProvider ?? "anthropic";
     const apiKey = keys[synthesizer];
     if (!apiKey) return;
 
