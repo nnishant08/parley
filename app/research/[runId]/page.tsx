@@ -25,44 +25,71 @@ export default function RunPage() {
   const hydrated = useKeyStore((s) => s.hydrated);
   const hydrate = useKeyStore((s) => s.hydrate);
   const run = useRunStore((s) => s.current);
-  const initProvider = useRunStore((s) => s.initProvider);
-  const markLaunched = useRunStore((s) => s.markLaunched);
-  const setStatus = useRunStore((s) => s.setStatus);
-  const appendMarkdown = useRunStore((s) => s.appendMarkdown);
-  const appendSources = useRunStore((s) => s.appendSources);
-  const appendSearchQuery = useRunStore((s) => s.appendSearchQuery);
-  const setError = useRunStore((s) => s.setError);
 
   useEffect(() => {
     hydrate();
   }, [hydrate]);
 
   // Redirect home if we lost the run state (e.g. user pasted a URL).
+  // Only watch hydrated + run.id (not the whole run object) so this
+  // effect doesn't re-fire on every state update.
+  const runIdActual = run?.id;
   useEffect(() => {
     if (!hydrated) return;
-    if (!run || run.id !== runId) {
+    if (!runIdActual || runIdActual !== runId) {
       const t = setTimeout(() => router.replace("/"), 50);
       return () => clearTimeout(t);
     }
-  }, [hydrated, run, runId, router]);
+  }, [hydrated, runIdActual, runId, router]);
 
-  // Kick off Claude. Guarded by markLaunched so React strict mode's
-  // double-invocation of effects doesn't double-fire the API call.
+  // Kick off Claude exactly once per (runId, apiKey) pair.
+  //
+  // Two subtle traps live here, both fixed by the current shape:
+  //
+  //  1. Don't subscribe to `run` in the deps. The effect itself calls
+  //     markLaunched/initProvider/setStatus which mutate `run`, so the
+  //     effect would re-fire mid-fetch and the cleanup would abort the
+  //     in-flight request. We read the fresh run via getState() instead.
+  //
+  //  2. Don't abort the fetch from the effect's cleanup. React strict
+  //     mode (dev only) runs setup → cleanup → setup on every mount; if
+  //     the cleanup aborts the fetch and markLaunched then blocks the
+  //     re-launch, every dev request dies in the first millisecond.
+  //     The fetch runs to completion regardless of unmount; the onEvent
+  //     dispatcher drops events if the user has navigated to a different
+  //     runId in the meantime. Proper cancellation will land in step 15.
+  const apiKey = keys?.anthropic;
   useEffect(() => {
-    if (!run || run.id !== runId) return;
-    if (!keys?.anthropic) return;
+    if (!runId || !apiKey) return;
+    const cur = useRunStore.getState().current;
+    if (!cur || cur.id !== runId) return;
+
+    const {
+      markLaunched,
+      initProvider,
+      setStatus,
+      appendMarkdown,
+      appendSources,
+      appendSearchQuery,
+      setError,
+    } = useRunStore.getState();
+
     if (!markLaunched("anthropic")) return;
 
     initProvider("anthropic");
     setStatus("anthropic", "planning");
 
-    const ac = new AbortController();
+    const startedForRunId = runId;
+    const isStillCurrent = () =>
+      useRunStore.getState().current?.id === startedForRunId;
+
     void researchClaude({
-      question: run.question,
-      apiKey: keys.anthropic,
-      contextDocs: run.contextDocs,
-      signal: ac.signal,
+      question: cur.question,
+      apiKey,
+      contextDocs: cur.contextDocs,
+      // intentionally no AbortSignal — see comment block above
       onEvent: (e) => {
+        if (!isStillCurrent()) return;
         switch (e.type) {
           case "status":
             if (e.status) setStatus("anthropic", e.status, e.detail);
@@ -82,20 +109,7 @@ export default function RunPage() {
         }
       },
     });
-
-    return () => ac.abort();
-  }, [
-    run,
-    runId,
-    keys?.anthropic,
-    initProvider,
-    markLaunched,
-    setStatus,
-    appendMarkdown,
-    appendSources,
-    appendSearchQuery,
-    setError,
-  ]);
+  }, [runId, apiKey]);
 
   if (!hydrated) {
     return (

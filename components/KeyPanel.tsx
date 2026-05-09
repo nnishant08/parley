@@ -8,7 +8,16 @@ import { useKeyStore } from "@/lib/store";
 import { validateKeyFormat } from "@/lib/crypto/keys";
 import { PROVIDERS, PROVIDER_LABEL, type Provider, type ProviderKeys } from "@/lib/types";
 import { cn } from "@/lib/utils";
-import { Eye, EyeOff, Lock, Unlock, Trash2, KeyRound } from "lucide-react";
+import {
+  Eye,
+  EyeOff,
+  Lock,
+  Unlock,
+  Trash2,
+  KeyRound,
+  Copy,
+  Check,
+} from "lucide-react";
 
 const PROVIDER_HINT: Record<Provider, string> = {
   anthropic: "sk-ant-…",
@@ -254,6 +263,41 @@ function UnlockedView({
   onLock: () => void;
   onForget: () => void;
 }) {
+  const [reveal, setReveal] = useState(false);
+  const [copiedAll, setCopiedAll] = useState(false);
+  const [copiedKey, setCopiedKey] = useState<Provider | null>(null);
+
+  async function copyAll() {
+    const json = JSON.stringify(keys, null, 2);
+    try {
+      await navigator.clipboard.writeText(json);
+      setCopiedAll(true);
+      setTimeout(() => setCopiedAll(false), 1500);
+    } catch {
+      // fall back to a textarea trick
+      const ta = document.createElement("textarea");
+      ta.value = json;
+      ta.style.position = "fixed";
+      ta.style.left = "-9999px";
+      document.body.appendChild(ta);
+      ta.select();
+      document.execCommand("copy");
+      document.body.removeChild(ta);
+      setCopiedAll(true);
+      setTimeout(() => setCopiedAll(false), 1500);
+    }
+  }
+
+  async function copyOne(p: Provider) {
+    try {
+      await navigator.clipboard.writeText(keys[p]);
+      setCopiedKey(p);
+      setTimeout(() => setCopiedKey(null), 1500);
+    } catch {
+      /* ignore */
+    }
+  }
+
   return (
     <div className="rounded-lg border border-border bg-card p-6">
       <div className="flex items-center justify-between">
@@ -262,6 +306,14 @@ function UnlockedView({
           <h2 className="font-semibold">Keys unlocked</h2>
         </div>
         <div className="flex gap-2">
+          <Button size="sm" variant="outline" onClick={() => setReveal((r) => !r)}>
+            {reveal ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+            {reveal ? "Hide" : "Show"}
+          </Button>
+          <Button size="sm" variant="outline" onClick={copyAll}>
+            {copiedAll ? <Check className="h-4 w-4" /> : <Copy className="h-4 w-4" />}
+            {copiedAll ? "Copied" : "Copy all (JSON)"}
+          </Button>
           <Button size="sm" variant="outline" onClick={onLock}>
             Lock
           </Button>
@@ -274,15 +326,39 @@ function UnlockedView({
         {PROVIDERS.map((p) => (
           <li
             key={p}
-            className="flex items-center justify-between rounded-md border border-border px-3 py-2"
+            className="flex items-center justify-between gap-3 rounded-md border border-border px-3 py-2"
           >
-            <span className="font-medium">{PROVIDER_LABEL[p]}</span>
-            <span className="font-mono text-xs text-muted-foreground">
-              {maskKey(keys[p])}
+            <span className="font-medium shrink-0">{PROVIDER_LABEL[p]}</span>
+            <span
+              className={cn(
+                "min-w-0 flex-1 truncate font-mono text-xs text-muted-foreground",
+                reveal ? "text-right" : "text-right",
+              )}
+              title={reveal ? keys[p] : undefined}
+            >
+              {reveal ? keys[p] : maskKey(keys[p])}
             </span>
+            <Button
+              size="icon"
+              variant="ghost"
+              className="h-7 w-7 shrink-0"
+              onClick={() => copyOne(p)}
+              aria-label={`Copy ${PROVIDER_LABEL[p]} key`}
+            >
+              {copiedKey === p ? (
+                <Check className="h-3.5 w-3.5 text-emerald-500" />
+              ) : (
+                <Copy className="h-3.5 w-3.5" />
+              )}
+            </Button>
           </li>
         ))}
       </ul>
+      {reveal && (
+        <p className="mt-3 text-xs text-muted-foreground">
+          Keys are visible. Copy what you need, then click Hide.
+        </p>
+      )}
     </div>
   );
 }
