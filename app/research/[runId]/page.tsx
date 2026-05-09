@@ -8,6 +8,7 @@ import { ModelCard } from "@/components/ModelCard";
 import { researchClaude, type RunEvent } from "@/lib/providers/anthropic";
 import { researchMistral } from "@/lib/providers/mistral";
 import { researchOpenAI } from "@/lib/providers/openai";
+import { researchGemini } from "@/lib/providers/gemini";
 import {
   useKeyStore,
   useRunStore,
@@ -36,6 +37,7 @@ const RUNNERS: Partial<Record<Provider, Runner>> = {
   anthropic: researchClaude,
   mistral: researchMistral,
   openai: researchOpenAI,
+  gemini: researchGemini,
 };
 
 const APPROXIMATED: Partial<Record<Provider, boolean>> = {
