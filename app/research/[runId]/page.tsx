@@ -10,6 +10,8 @@ import { researchMistral } from "@/lib/providers/mistral";
 import { researchOpenAI } from "@/lib/providers/openai";
 import { researchGemini } from "@/lib/providers/gemini";
 import { runCritique, eligibleProviders } from "@/lib/providers/critique";
+import { runSynthesis } from "@/lib/providers/synthesis";
+import { FinalReport } from "@/components/FinalReport";
 import {
   useKeyStore,
   useRunStore,
@@ -216,6 +218,70 @@ export default function RunPage() {
     }
   }, [stageOneTerminal, runId, keys, run]);
 
+  // Synthesis auto-fire: once stage 2 is finished — every provider that
+  // entered the critique stage has reached critique_done OR failed —
+  // kick off the synthesizer (default Claude). Synthesis only runs if
+  // we have at least one good report to synthesize.
+  const stageTwoLaunched = run
+    ? Object.keys(run.critiqueLaunched ?? {}).length > 0
+    : false;
+  const stageTwoTerminal =
+    stageTwoLaunched &&
+    run !== null &&
+    PROVIDERS.every((p) => {
+      const launched = run.critiqueLaunched[p];
+      if (!launched) return true; // not part of stage 2
+      const s = run.providers[p]?.status;
+      return s === "critique_done" || s === "failed";
+    });
+
+  useEffect(() => {
+    if (!stageTwoTerminal) return;
+    if (!keys || !run) return;
+    const cur = useRunStore.getState().current;
+    if (!cur || cur.id !== runId) return;
+    if (cur.synthesisLaunched) return;
+
+    const reports: Array<{ provider: Provider; markdown: string }> = [];
+    for (const p of PROVIDERS) {
+      const pr = cur.providers[p];
+      if (pr && (pr.status === "done" || pr.status === "critique_done") && pr.markdown) {
+        reports.push({ provider: p, markdown: pr.markdown });
+      }
+    }
+    if (reports.length === 0) return;
+
+    const synthesizer: Provider = "anthropic"; // step 14 picker
+    const apiKey = keys[synthesizer];
+    if (!apiKey) return;
+
+    if (!useRunStore.getState().markSynthesisLaunched(synthesizer)) return;
+
+    const startedForRunId = runId;
+    void runSynthesis({
+      question: cur.question,
+      reports,
+      critiques: cur.critiques,
+      synthesizer,
+      apiKey,
+      onEvent: (e) => {
+        if (useRunStore.getState().current?.id !== startedForRunId) return;
+        const s = useRunStore.getState();
+        switch (e.type) {
+          case "status":
+            if (e.status) s.setSynthesisStatus(e.status);
+            break;
+          case "text_delta":
+            if (e.textDelta) s.appendSynthesisMarkdown(e.textDelta);
+            break;
+          case "error":
+            s.setSynthesisStatus("failed", e.error);
+            break;
+        }
+      },
+    });
+  }, [stageTwoTerminal, runId, keys, run]);
+
   if (!run || run.id !== runId) {
     return (
       <main className="container mx-auto max-w-5xl px-6 py-16 text-sm text-muted-foreground">
@@ -273,6 +339,8 @@ export default function RunPage() {
           );
         })}
       </div>
+
+      <FinalReport state={run.synthesis} />
     </main>
   );
 }

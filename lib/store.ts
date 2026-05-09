@@ -94,6 +94,21 @@ const emptyRun = (): ProviderRun => ({
   searchQueries: [],
 });
 
+export type SynthesisStatus =
+  | "idle"
+  | "writing"
+  | "done"
+  | "failed";
+
+export interface SynthesisState {
+  status: SynthesisStatus;
+  markdown: string;
+  startedAt?: number;
+  endedAt?: number;
+  error?: string;
+  synthesizer?: Provider;
+}
+
 export interface ResearchRun {
   id: string;
   question: string;
@@ -107,6 +122,9 @@ export interface ResearchRun {
   critiques: Critique[];
   // Per-provider flag — has this provider's critique pass been launched?
   critiqueLaunched: Partial<Record<Provider, boolean>>;
+  // Stage 3 — the synthesized final report.
+  synthesis: SynthesisState;
+  synthesisLaunched: boolean;
 }
 
 interface RunStoreState {
@@ -129,6 +147,10 @@ interface RunStoreState {
 
   markCritiqueLaunched: (provider: Provider) => boolean;
   addCritiques: (critiques: Critique[]) => void;
+
+  markSynthesisLaunched: (synthesizer: Provider) => boolean;
+  setSynthesisStatus: (status: SynthesisStatus, error?: string) => void;
+  appendSynthesisMarkdown: (delta: string) => void;
 }
 
 function patchProvider(
@@ -157,6 +179,8 @@ export const useRunStore = create<RunStoreState>((set, get) => ({
         launched: {},
         critiques: [],
         critiqueLaunched: {},
+        synthesis: { status: "idle", markdown: "" },
+        synthesisLaunched: false,
       },
     });
   },
@@ -271,6 +295,58 @@ export const useRunStore = create<RunStoreState>((set, get) => ({
     if (!cur) return;
     set({
       current: { ...cur, critiques: [...cur.critiques, ...critiques] },
+    });
+  },
+
+  markSynthesisLaunched: (synthesizer) => {
+    const cur = get().current;
+    if (!cur) return false;
+    if (cur.synthesisLaunched) return false;
+    set({
+      current: {
+        ...cur,
+        synthesisLaunched: true,
+        synthesis: {
+          ...cur.synthesis,
+          status: "writing",
+          startedAt: Date.now(),
+          synthesizer,
+        },
+      },
+    });
+    return true;
+  },
+
+  setSynthesisStatus: (status, error) => {
+    const cur = get().current;
+    if (!cur) return;
+    set({
+      current: {
+        ...cur,
+        synthesis: {
+          ...cur.synthesis,
+          status,
+          error: error ?? cur.synthesis.error,
+          endedAt:
+            status === "done" || status === "failed"
+              ? Date.now()
+              : cur.synthesis.endedAt,
+        },
+      },
+    });
+  },
+
+  appendSynthesisMarkdown: (delta) => {
+    const cur = get().current;
+    if (!cur) return;
+    set({
+      current: {
+        ...cur,
+        synthesis: {
+          ...cur.synthesis,
+          markdown: cur.synthesis.markdown + delta,
+        },
+      },
     });
   },
 }));
