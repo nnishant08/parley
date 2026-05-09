@@ -21,8 +21,9 @@ interface RunArgs {
  * Streams the synthesis call through /api/research/synthesize and
  * dispatches text deltas as the final report is written.
  *
- * Step 8 only supports synthesizer="anthropic"; the route will 501
- * for anything else until step 14 lands the real picker.
+ * Routes to the chosen synthesizer (any of the 4 providers).
+ * Server side translates each provider's stream into Anthropic-shaped
+ * SSE so this client can stay simple.
  */
 export async function runSynthesis({
   question,
@@ -69,8 +70,9 @@ export async function runSynthesis({
     return;
   }
 
-  // Same SSE shape as Claude stage-1 since both go through Anthropic
-  // /v1/messages.
+  // The server route emits Anthropic-shaped SSE events regardless of
+  // which synthesizer ran upstream (see lib/sseEmit.ts), so this
+  // parser handles all four providers uniformly.
   try {
     for await (const msg of parseSseStream(resp.body)) {
       if (msg.event === "ping" || !msg.data) continue;

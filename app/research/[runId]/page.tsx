@@ -129,7 +129,7 @@ export default function RunPage() {
 
   // Kick off all wired-up providers exactly once per (runId, keys) pair.
   //
-  // Two subtle traps that bit me on step 3, both still relevant here:
+  // Two subtle traps:
   //
   //  1. Don't put `run` in the deps. The effect mutates run via
   //     markLaunched/initProvider/setStatus, which would re-fire the
@@ -139,8 +139,9 @@ export default function RunPage() {
   //     setup → cleanup → setup in dev; the cleanup would abort the
   //     in-flight fetch and markLaunched would block the re-launch.
   //     Fetches run to completion; onEvent drops events if the user
-  //     has navigated to a different runId. Step 15 will replace this
-  //     with a ref-tracked controller that survives strict mode.
+  //     has navigated to a different runId. A proper ref-tracked
+  //     AbortController for in-flight cancel is on the deferred list
+  //     (see README → Known limitations).
   useEffect(() => {
     if (!runId || !keys) return;
     const cur = useRunStore.getState().current;
