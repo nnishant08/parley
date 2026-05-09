@@ -1,10 +1,7 @@
-import { RESEARCH_SYSTEM_PROMPT } from "@/lib/prompts/research-system";
 import { parseSseStream } from "@/lib/sse";
 import type { Source } from "@/lib/types";
 
 export const ANTHROPIC_RESEARCH_MODEL = "claude-opus-4-7";
-const ANTHROPIC_API_URL = "https://api.anthropic.com/v1/messages";
-const ANTHROPIC_VERSION = "2023-06-01";
 
 export type RunStatus =
   | "planning"
@@ -38,30 +35,19 @@ interface RunArgs {
   onEvent: (e: RunEvent) => void;
 }
 
-function buildUserMessage(
-  question: string,
-  contextDocs?: { name: string; text: string }[],
-): string {
-  if (!contextDocs?.length) return question;
-  const doclets = contextDocs
-    .map((d) => `<document name="${d.name}">\n${d.text}\n</document>`)
-    .join("\n\n");
-  return `${doclets}\n\nQuestion: ${question}`;
-}
-
 /**
- * Browser-direct streaming research call against Claude Opus 4.7
- * with the web_search_20260209 tool.
+ * Streaming research call against Claude Opus 4.7 with the
+ * web_search_20260209 tool, proxied through our Next.js route at
+ * /api/research/claude.
  *
- * We hit the API with raw fetch (no SDK) for two reasons:
- *   (1) the SDK pulls in node:fs/path via its credential-chain helpers,
- *       which webpack 5 can't bundle for the browser; and
- *   (2) keeping browser-direct callers SDK-free means one consistent
- *       fetch+SSE pattern across Claude and Mistral.
- *
- * The Anthropic API supports browser CORS only when we send the
- * `anthropic-dangerous-direct-browser-access: true` header. That's the
- * header the SDK's `dangerouslyAllowBrowser` flag toggles internally.
+ * Why proxy instead of browser-direct: the Anthropic browser CORS path
+ * (anthropic-dangerous-direct-browser-access) hung on at least one
+ * common dev setup — likely a preflight blocked by an extension or
+ * corporate proxy. Routing through Next.js sidesteps that entirely.
+ * Trade-off: on Vercel Hobby, function timeout is 60s (so research
+ * calls longer than that will fail in production). Mitigations: typical
+ * Claude+web_search runs are 30–60s, retry surfaces the rest, and
+ * upgrading to Pro gives 300s.
  */
 export async function researchClaude({
   question,
@@ -72,54 +58,53 @@ export async function researchClaude({
 }: RunArgs): Promise<void> {
   onEvent({ type: "status", status: "planning" });
 
-  // Buffer partial JSON for in-flight server_tool_use blocks so we can
-  // surface the search query once it finishes streaming.
+  // eslint-disable-next-line no-console
+  console.info("[claude] POST /api/research/claude — starting…");
+
   const toolInputBuffers = new Map<number, string>();
 
   let resp: Response;
   try {
-    resp = await fetch(ANTHROPIC_API_URL, {
+    resp = await fetch("/api/research/claude", {
       method: "POST",
       signal,
-      headers: {
-        "content-type": "application/json",
-        "x-api-key": apiKey,
-        "anthropic-version": ANTHROPIC_VERSION,
-        "anthropic-dangerous-direct-browser-access": "true",
-      },
-      body: JSON.stringify({
-        model: ANTHROPIC_RESEARCH_MODEL,
-        max_tokens: 16000,
-        system: RESEARCH_SYSTEM_PROMPT,
-        messages: [
-          { role: "user", content: buildUserMessage(question, contextDocs) },
-        ],
-        tools: [
-          { type: "web_search_20260209", name: "web_search", max_uses: 10 },
-        ],
-        stream: true,
-      }),
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ question, apiKey, contextDocs }),
     });
   } catch (e) {
     if ((e as { name?: string }).name === "AbortError") return;
+    // eslint-disable-next-line no-console
+    console.error("[claude] fetch failed:", e);
     onEvent({
       type: "error",
-      error: e instanceof Error ? e.message : "Network error",
+      error:
+        e instanceof Error
+          ? `Network error: ${e.message}`
+          : "Network error reaching the proxy route",
     });
     onEvent({ type: "status", status: "failed" });
     return;
   }
 
+  // eslint-disable-next-line no-console
+  console.info(`[claude] response status ${resp.status} ${resp.statusText}`);
+
   if (!resp.ok || !resp.body) {
     let detail = `HTTP ${resp.status}`;
     try {
       const text = await resp.text();
-      const j = JSON.parse(text) as { error?: { message?: string } };
-      if (j.error?.message) detail = `${detail}: ${j.error.message}`;
-      else if (text) detail = `${detail}: ${text.slice(0, 200)}`;
+      try {
+        const j = JSON.parse(text) as { error?: { message?: string } };
+        if (j.error?.message) detail = `${detail}: ${j.error.message}`;
+        else if (text) detail = `${detail}: ${text.slice(0, 300)}`;
+      } catch {
+        if (text) detail = `${detail}: ${text.slice(0, 300)}`;
+      }
     } catch {
-      /* fall through */
+      /* ignore */
     }
+    // eslint-disable-next-line no-console
+    console.error("[claude] non-OK response:", detail);
     onEvent({ type: "error", error: detail });
     onEvent({ type: "status", status: "failed" });
     return;
@@ -260,6 +245,8 @@ export async function researchClaude({
     }
   } catch (e) {
     if ((e as { name?: string }).name === "AbortError") return;
+    // eslint-disable-next-line no-console
+    console.error("[claude] stream parse error:", e);
     onEvent({
       type: "error",
       error: e instanceof Error ? e.message : "Stream parse error",
