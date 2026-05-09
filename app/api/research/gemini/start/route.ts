@@ -19,12 +19,24 @@ interface Body {
 function buildUserText(
   question: string,
   contextDocs?: { name: string; text: string }[],
+  systemInstruction?: string,
 ): string {
-  if (!contextDocs?.length) return question;
-  const doclets = contextDocs
-    .map((d) => `<document name="${d.name}">\n${d.text}\n</document>`)
-    .join("\n\n");
-  return `${doclets}\n\nQuestion: ${question}`;
+  // Gemini's deep-research-preview agent rejects `system_instruction`;
+  // the API explicitly tells us to fold any instructions into the
+  // input prompt instead. Prepend with a clear xml-tagged section.
+  const parts: string[] = [];
+  if (systemInstruction) {
+    parts.push(`<instructions>\n${systemInstruction}\n</instructions>`);
+  }
+  if (contextDocs?.length) {
+    parts.push(
+      contextDocs
+        .map((d) => `<document name="${d.name}">\n${d.text}\n</document>`)
+        .join("\n\n"),
+    );
+  }
+  parts.push(`<question>\n${question}\n</question>`);
+  return parts.join("\n\n");
 }
 
 export async function POST(req: NextRequest) {
@@ -52,8 +64,7 @@ export async function POST(req: NextRequest) {
   try {
     const interaction = await ai.interactions.create({
       agent,
-      input: buildUserText(question, contextDocs),
-      system_instruction: RESEARCH_SYSTEM_PROMPT,
+      input: buildUserText(question, contextDocs, RESEARCH_SYSTEM_PROMPT),
       background: true,
     });
     // eslint-disable-next-line no-console

@@ -31,17 +31,16 @@ interface PollResp {
   webSearches?: number;
   text?: string;
   sources?: Source[];
+  searchQueries?: string[];
   error?: string;
 }
 
 /**
- * Gemini Deep Research follows a submit-and-poll pattern (the agent
- * runs minutes, not seconds). Mirrors lib/providers/openai.ts almost
- * exactly — only the proxy URLs and the field names differ.
- *
- * The Interactions API is in beta; if Google ships a breaking schema
- * change, this and the /api/research/gemini/poll extractor are the
- * places to fix.
+ * Gemini Deep Research — submit + poll. The interactions API runs
+ * 5–30 min upstream, so to avoid the card sitting empty we extract
+ * live progress (search queries, source URLs, partial text) on every
+ * poll and dispatch only the deltas to the store. Same shape as the
+ * streaming providers from the UI's perspective.
  */
 export async function researchGemini({
   question,
@@ -96,8 +95,14 @@ export async function researchGemini({
   );
   onEvent({ type: "status", status: "searching", detail: "submitted" });
 
-  const startedAt = Date.now();
+  // Track what we've already dispatched so we only emit deltas.
+  const seenQueries = new Set<string>();
+  const seenSources = new Set<string>();
+  let dispatchedTextLen = 0;
   let knownSearches = 0;
+  let lastStatus: "searching" | "writing" = "searching";
+
+  const startedAt = Date.now();
 
   while (Date.now() - startedAt < MAX_DURATION_MS) {
     await sleep(POLL_INTERVAL_MS);
@@ -111,14 +116,13 @@ export async function researchGemini({
       });
       poll = (await r.json()) as PollResp;
       if (!r.ok || poll.error) {
-        // status field may still indicate non-terminal — check it
         if (
           poll.status &&
           poll.status !== "failed" &&
           poll.status !== "cancelled" &&
           poll.status !== "incomplete"
         ) {
-          continue; // transient; keep polling
+          continue;
         }
         onEvent({ type: "error", error: poll.error || `HTTP ${r.status}` });
         onEvent({ type: "status", status: "failed" });
@@ -130,22 +134,56 @@ export async function researchGemini({
       continue;
     }
 
+    // Emit any new search queries
+    if (poll.searchQueries?.length) {
+      for (const q of poll.searchQueries) {
+        if (!seenQueries.has(q)) {
+          seenQueries.add(q);
+          onEvent({ type: "search_query", query: q });
+        }
+      }
+    }
+
+    // Emit any new sources
+    if (poll.sources?.length) {
+      const fresh: Source[] = [];
+      for (const s of poll.sources) {
+        if (!seenSources.has(s.url)) {
+          seenSources.add(s.url);
+          fresh.push(s);
+        }
+      }
+      if (fresh.length) onEvent({ type: "search_results", sources: fresh });
+    }
+
+    // Emit any new text (partial accumulation while in_progress, or
+    // the full final text on completed)
+    if (poll.text && poll.text.length > dispatchedTextLen) {
+      const delta = poll.text.slice(dispatchedTextLen);
+      dispatchedTextLen = poll.text.length;
+      if (lastStatus !== "writing") {
+        lastStatus = "writing";
+        onEvent({ type: "status", status: "writing" });
+      }
+      onEvent({ type: "text_delta", textDelta: delta });
+    }
+
+    // Update searches count + detail
     if (
       typeof poll.webSearches === "number" &&
       poll.webSearches > knownSearches
     ) {
       knownSearches = poll.webSearches;
-      onEvent({
-        type: "status",
-        status: "searching",
-        detail: `${knownSearches} search${knownSearches === 1 ? "" : "es"}`,
-      });
+      if (lastStatus === "searching") {
+        onEvent({
+          type: "status",
+          status: "searching",
+          detail: `${knownSearches} search${knownSearches === 1 ? "" : "es"}`,
+        });
+      }
     }
 
     if (poll.status === "completed") {
-      onEvent({ type: "status", status: "writing" });
-      if (poll.sources?.length) onEvent({ type: "search_results", sources: poll.sources });
-      if (poll.text) onEvent({ type: "text_delta", textDelta: poll.text });
       onEvent({
         type: "status",
         status: "done",

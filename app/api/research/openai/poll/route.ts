@@ -25,30 +25,60 @@ interface OutputContent {
 
 interface OutputItem {
   type?: string;
+  status?: string;
   content?: OutputContent[];
+  // web_search_call shape: { type: "web_search_call", action: { query, type } }
+  action?: { type?: string; query?: string };
+  // reasoning shape: { type: "reasoning", summary?: [{ type, text }] }
+  summary?: Array<{ type?: string; text?: string }>;
+}
+
+interface Progress {
+  text: string;
+  sources: { url: string; title?: string }[];
+  searchQueries: string[];
+  searchCount: number;
 }
 
 /**
- * Extract the assistant's final markdown + cited sources from a
- * completed Responses API result. Deep research returns a list of
- * output items; we want the last "message" item's text content and
- * its url_citation annotations.
+ * Walk the response output and extract everything we can show now.
+ * Called every poll, not just on completion, so the UI sees live
+ * progress instead of an empty card for 30 minutes.
+ *
+ *   - web_search_call → query, count
+ *   - last "message" item → text + url-citation annotations (sources)
+ *   - reasoning items contribute to "feels alive" via search count
  */
-function extractFinal(output: OutputItem[] | undefined): {
-  text: string;
-  sources: { url: string; title?: string }[];
-} {
-  if (!output?.length) return { text: "", sources: [] };
-  // Walk from the end; the final assistant message is what we want.
+function extractProgress(output: OutputItem[] | undefined): Progress {
+  const sources: { url: string; title?: string }[] = [];
+  const seen = new Set<string>();
+  const queries: string[] = [];
+  const seenQueries = new Set<string>();
+  let text = "";
+  let searchCount = 0;
+
+  if (!output?.length) return { text, sources, searchQueries: queries, searchCount };
+
+  // Collect search calls + queries
+  for (const item of output) {
+    if (item.type === "web_search_call") {
+      searchCount++;
+      const q = item.action?.query;
+      if (typeof q === "string" && q.length > 0 && !seenQueries.has(q)) {
+        seenQueries.add(q);
+        queries.push(q);
+      }
+    }
+  }
+
+  // Final assistant message (last "message" item) — text + citations
   for (let i = output.length - 1; i >= 0; i--) {
     const item = output[i];
     if (item.type !== "message") continue;
-    const content = item.content?.[0];
-    if (!content || typeof content.text !== "string") continue;
-    const text = content.text;
-    const seen = new Set<string>();
-    const sources: { url: string; title?: string }[] = [];
-    for (const a of content.annotations ?? []) {
+    const c = item.content?.[0];
+    if (!c || typeof c.text !== "string") continue;
+    text = c.text;
+    for (const a of c.annotations ?? []) {
       if (typeof a.url === "string" && !seen.has(a.url)) {
         seen.add(a.url);
         sources.push({
@@ -57,9 +87,10 @@ function extractFinal(output: OutputItem[] | undefined): {
         });
       }
     }
-    return { text, sources };
+    break;
   }
-  return { text: "", sources: [] };
+
+  return { text, sources, searchQueries: queries, searchCount };
 }
 
 export async function POST(req: NextRequest) {
@@ -77,41 +108,56 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  const client = new OpenAI({ apiKey });
+  // Polls are tiny but can also be 429'd; same retry budget as start.
+  const client = new OpenAI({ apiKey, maxRetries: 6 });
   try {
     const resp = await client.responses.retrieve(responseId);
     const status = resp.status as string | undefined;
-
-    // Lightweight progress signal: count web_search_call entries the
-    // model has emitted so far. Lets the UI show "N searches so far".
-    let webSearches = 0;
-    for (const item of (resp.output as OutputItem[] | undefined) ?? []) {
-      if (item.type === "web_search_call") webSearches++;
-    }
+    const { text, sources, searchQueries, searchCount } = extractProgress(
+      resp.output as OutputItem[] | undefined,
+    );
 
     if (status === "completed") {
-      const { text, sources } = extractFinal(
-        resp.output as OutputItem[] | undefined,
+      // eslint-disable-next-line no-console
+      console.log(
+        `[proxy/openai/poll] COMPLETED ${responseId} — ${text.length} chars, ${sources.length} sources, ${searchCount} searches`,
       );
       return Response.json({
         status,
-        webSearches,
+        webSearches: searchCount,
         text,
         sources,
+        searchQueries,
         usage: resp.usage ?? null,
       });
     }
 
-    if (status === "failed" || status === "cancelled" || status === "incomplete") {
+    if (
+      status === "failed" ||
+      status === "cancelled" ||
+      status === "incomplete"
+    ) {
       const errMsg =
-        // OpenAI's response shape exposes `error` on terminal states.
         (resp as unknown as { error?: { message?: string } }).error?.message ??
         `Response ended with status ${status}`;
-      return Response.json({ status, error: errMsg, webSearches });
+      return Response.json({
+        status,
+        error: errMsg,
+        webSearches: searchCount,
+        text,
+        sources,
+        searchQueries,
+      });
     }
 
-    // queued / in_progress
-    return Response.json({ status, webSearches });
+    // queued / in_progress — return live progress
+    return Response.json({
+      status,
+      webSearches: searchCount,
+      text,
+      sources,
+      searchQueries,
+    });
   } catch (e) {
     // eslint-disable-next-line no-console
     console.error("[proxy/openai/poll] retrieve failed:", e);

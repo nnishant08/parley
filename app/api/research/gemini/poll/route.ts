@@ -25,80 +25,109 @@ interface UrlContextResult {
   url?: string;
 }
 
-// The SDK's Step union is large; we only care about a few variants.
+// SDK Step union is large; we only inspect a few variants.
 interface StepBase {
   type?: string;
   content?: InteractionContent[];
   result?: UrlContextResult[];
+  arguments?: string;
+  name?: string;
+}
+
+interface Progress {
+  text: string;
+  sources: { url: string; title?: string }[];
+  searchQueries: string[];
+  searchCount: number;
 }
 
 /**
- * Walk the interaction's steps to extract the final markdown + sources.
- *
- *  - Last "model_output" step → its content[0].parts[*].text concatenated
- *  - URL context result steps → URLs of successfully fetched sources
- *  - Grounding metadata on model_output → web search citation URLs
+ * Walk all steps and extract progress so far. Called on every poll —
+ * not just on "completed" — so the UI sees searches, sources, and
+ * partial text accumulate live instead of staring at an empty card
+ * for 10+ minutes.
  */
-function extractFinal(steps: StepBase[] | undefined): {
-  text: string;
-  sources: { url: string; title?: string }[];
-  searchCount: number;
-} {
+function extractProgress(steps: StepBase[] | undefined): Progress {
   const sources: { url: string; title?: string }[] = [];
   const seen = new Set<string>();
+  const queries: string[] = [];
+  const seenQueries = new Set<string>();
   let text = "";
   let searchCount = 0;
 
-  if (!steps?.length) return { text, sources, searchCount };
+  if (!steps?.length)
+    return { text, sources, searchQueries: queries, searchCount };
 
-  // Find the last model_output and accumulate its text.
-  for (let i = steps.length - 1; i >= 0; i--) {
-    const step = steps[i];
-    if (step.type === "model_output" && Array.isArray(step.content)) {
-      const buf: string[] = [];
-      for (const c of step.content) {
-        for (const p of c.parts ?? []) {
-          if (typeof p.text === "string") buf.push(p.text);
-        }
-        // grounding citations
-        for (const g of c.groundingMetadata?.groundingChunks ?? []) {
-          const w = g.web;
-          if (w?.uri && !seen.has(w.uri)) {
-            seen.add(w.uri);
-            sources.push({ url: w.uri, title: w.title });
+  for (const step of steps) {
+    switch (step.type) {
+      case "model_output": {
+        // Accumulate text from any model_output we see (there might be
+        // multiple in a deep research run; concatenate in order).
+        for (const c of step.content ?? []) {
+          for (const p of c.parts ?? []) {
+            if (typeof p.text === "string") text += p.text;
+          }
+          for (const g of c.groundingMetadata?.groundingChunks ?? []) {
+            const w = g.web;
+            if (w?.uri && !seen.has(w.uri)) {
+              seen.add(w.uri);
+              sources.push({ url: w.uri, title: w.title });
+            }
           }
         }
+        break;
       }
-      if (buf.length) {
-        text = buf.join("");
+      case "google_search_call": {
+        searchCount++;
+        if (typeof step.arguments === "string" && step.arguments) {
+          try {
+            const a = JSON.parse(step.arguments) as { query?: string };
+            if (typeof a.query === "string" && !seenQueries.has(a.query)) {
+              seenQueries.add(a.query);
+              queries.push(a.query);
+            }
+          } catch {
+            /* ignore */
+          }
+        }
+        break;
+      }
+      case "url_context_call": {
+        searchCount++;
+        if (typeof step.arguments === "string" && step.arguments) {
+          try {
+            const a = JSON.parse(step.arguments) as { urls?: string[] };
+            if (Array.isArray(a.urls)) {
+              for (const u of a.urls) {
+                if (typeof u === "string" && !seen.has(u)) {
+                  seen.add(u);
+                  sources.push({ url: u });
+                }
+              }
+            }
+          } catch {
+            /* ignore */
+          }
+        }
+        break;
+      }
+      case "url_context_result": {
+        for (const r of step.result ?? []) {
+          if (
+            r.url &&
+            (r.status === "success" || r.status === undefined) &&
+            !seen.has(r.url)
+          ) {
+            seen.add(r.url);
+            sources.push({ url: r.url });
+          }
+        }
         break;
       }
     }
   }
 
-  // URLs touched via the URL-context tool
-  for (const step of steps) {
-    if (step.type === "url_context_result" && Array.isArray(step.result)) {
-      for (const r of step.result) {
-        if (
-          r.url &&
-          (r.status === "success" || r.status === undefined) &&
-          !seen.has(r.url)
-        ) {
-          seen.add(r.url);
-          sources.push({ url: r.url });
-        }
-      }
-    }
-    if (
-      step.type === "google_search_call" ||
-      step.type === "url_context_call"
-    ) {
-      searchCount++;
-    }
-  }
-
-  return { text, sources, searchCount };
+  return { text, sources, searchQueries: queries, searchCount };
 }
 
 export async function POST(req: NextRequest) {
@@ -121,14 +150,19 @@ export async function POST(req: NextRequest) {
     const interaction = await ai.interactions.get(interactionId);
     const status = interaction.status;
     const steps = (interaction as unknown as { steps?: StepBase[] }).steps;
-    const { text, sources, searchCount } = extractFinal(steps);
+    const { text, sources, searchQueries, searchCount } = extractProgress(steps);
 
     if (status === "completed") {
+      // eslint-disable-next-line no-console
+      console.log(
+        `[proxy/gemini/poll] COMPLETED ${interactionId} — ${text.length} chars, ${sources.length} sources, ${searchCount} searches`,
+      );
       return Response.json({
         status,
         webSearches: searchCount,
         text,
         sources,
+        searchQueries,
       });
     }
     if (
@@ -140,10 +174,19 @@ export async function POST(req: NextRequest) {
         status,
         webSearches: searchCount,
         error: `Interaction ended with status ${status}`,
+        text,
+        sources,
+        searchQueries,
       });
     }
-    // in_progress / requires_action
-    return Response.json({ status, webSearches: searchCount });
+    // in_progress / requires_action — return live progress
+    return Response.json({
+      status,
+      webSearches: searchCount,
+      text,
+      sources,
+      searchQueries,
+    });
   } catch (e) {
     // eslint-disable-next-line no-console
     console.error("[proxy/gemini/poll] retrieve failed:", e);

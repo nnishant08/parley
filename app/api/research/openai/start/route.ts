@@ -46,7 +46,12 @@ export async function POST(req: NextRequest) {
   }
 
   const model = tier === "o4-mini" ? ALT_MODEL : DEFAULT_MODEL;
-  const client = new OpenAI({ apiKey });
+  // Bump retries from the SDK default of 2 → 6. Deep-research orgs
+  // routinely hit transient TPM caps (the prompt is ~30k tokens at
+  // ingestion); the SDK honors the upstream Retry-After header on
+  // 429s with exponential backoff, so this just rides them out
+  // instead of surfacing a flake to the user.
+  const client = new OpenAI({ apiKey, maxRetries: 6 });
 
   try {
     const resp = await client.responses.create({
@@ -65,7 +70,9 @@ export async function POST(req: NextRequest) {
         },
       ],
       tools: [{ type: "web_search_preview" }],
-      reasoning: { summary: "auto" },
+      // reasoning.summary requires a verified OpenAI org. Skipping it
+      // keeps the run available to all keys; the model still reasons,
+      // we just don't get the human-readable summary back.
       background: true,
     });
 

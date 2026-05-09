@@ -17,7 +17,7 @@ interface RunArgs {
 }
 
 const POLL_INTERVAL_MS = 10_000;
-const MAX_DURATION_MS = 30 * 60 * 1000; // 30 minutes
+const MAX_DURATION_MS = 30 * 60 * 1000;
 
 interface StartResp {
   responseId?: string;
@@ -31,20 +31,16 @@ interface PollResp {
   webSearches?: number;
   text?: string;
   sources?: Source[];
+  searchQueries?: string[];
   error?: string;
 }
 
 /**
- * OpenAI Deep Research follows a submit-and-poll pattern (the upstream
- * job runs 5–30 minutes), so unlike Claude/Mistral we don't stream
- * tokens — we stay on a "searching" status until OpenAI marks the
- * response completed, then dispatch the full markdown + sources at
- * once. Web-search count updates on each poll so the user sees
- * progress.
- *
- * Verified-org gate: OpenAI's deep research models 403 if the user's
- * org isn't verified. The error path surfaces the actual API message
- * so the user sees an actionable hint, not a generic failure.
+ * OpenAI Deep Research — submit + poll. The Responses API runs 5–30
+ * min upstream; polling extracts whatever is available now (search
+ * queries, source URLs, partial text from the in-flight message)
+ * and we dispatch only the deltas to the store. Card stays alive
+ * with live activity instead of empty for half an hour.
  */
 export async function researchOpenAI({
   question,
@@ -68,7 +64,6 @@ export async function researchOpenAI({
     startResp = (await r.json()) as StartResp;
     if (!r.ok || startResp.error) {
       const msg = startResp.error || `HTTP ${r.status}`;
-      // Hint specifically at the verified-org gate when we see a 403.
       const hint =
         r.status === 403
           ? " — Deep Research requires a verified org on your OpenAI account."
@@ -100,8 +95,13 @@ export async function researchOpenAI({
   console.info(`[openai] response queued: ${responseId} (${startResp.status})`);
   onEvent({ type: "status", status: "searching", detail: "submitted" });
 
-  const startedAt = Date.now();
+  const seenQueries = new Set<string>();
+  const seenSources = new Set<string>();
+  let dispatchedTextLen = 0;
   let knownSearches = 0;
+  let lastStatus: "searching" | "writing" = "searching";
+
+  const startedAt = Date.now();
 
   while (Date.now() - startedAt < MAX_DURATION_MS) {
     await sleep(POLL_INTERVAL_MS);
@@ -123,23 +123,54 @@ export async function researchOpenAI({
     } catch (e) {
       // eslint-disable-next-line no-console
       console.error("[openai] poll failed:", e);
-      // single transient failure shouldn't kill the run; loop and retry
       continue;
     }
 
-    if (typeof poll.webSearches === "number" && poll.webSearches > knownSearches) {
+    if (poll.searchQueries?.length) {
+      for (const q of poll.searchQueries) {
+        if (!seenQueries.has(q)) {
+          seenQueries.add(q);
+          onEvent({ type: "search_query", query: q });
+        }
+      }
+    }
+
+    if (poll.sources?.length) {
+      const fresh: Source[] = [];
+      for (const s of poll.sources) {
+        if (!seenSources.has(s.url)) {
+          seenSources.add(s.url);
+          fresh.push(s);
+        }
+      }
+      if (fresh.length) onEvent({ type: "search_results", sources: fresh });
+    }
+
+    if (poll.text && poll.text.length > dispatchedTextLen) {
+      const delta = poll.text.slice(dispatchedTextLen);
+      dispatchedTextLen = poll.text.length;
+      if (lastStatus !== "writing") {
+        lastStatus = "writing";
+        onEvent({ type: "status", status: "writing" });
+      }
+      onEvent({ type: "text_delta", textDelta: delta });
+    }
+
+    if (
+      typeof poll.webSearches === "number" &&
+      poll.webSearches > knownSearches
+    ) {
       knownSearches = poll.webSearches;
-      onEvent({
-        type: "status",
-        status: "searching",
-        detail: `${knownSearches} search${knownSearches === 1 ? "" : "es"}`,
-      });
+      if (lastStatus === "searching") {
+        onEvent({
+          type: "status",
+          status: "searching",
+          detail: `${knownSearches} search${knownSearches === 1 ? "" : "es"}`,
+        });
+      }
     }
 
     if (poll.status === "completed") {
-      onEvent({ type: "status", status: "writing" });
-      if (poll.sources?.length) onEvent({ type: "search_results", sources: poll.sources });
-      if (poll.text) onEvent({ type: "text_delta", textDelta: poll.text });
       onEvent({
         type: "status",
         status: "done",
@@ -164,7 +195,7 @@ export async function researchOpenAI({
       onEvent({ type: "status", status: "failed" });
       return;
     }
-    // status is queued / in_progress — keep polling
+    // queued / in_progress — keep polling
   }
 
   onEvent({
