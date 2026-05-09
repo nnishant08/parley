@@ -1,6 +1,12 @@
+"use client";
+
 import { KeyPanel } from "@/components/KeyPanel";
+import { QuestionInput } from "@/components/QuestionInput";
+import { useKeyStore } from "@/lib/store";
 
 export default function HomePage() {
+  const keys = useKeyStore((s) => s.keys);
+
   return (
     <main className="container mx-auto max-w-3xl px-6 py-16">
       <header className="mb-10">
@@ -13,7 +19,10 @@ export default function HomePage() {
         </p>
       </header>
 
-      <KeyPanel />
+      <div className="space-y-6">
+        <KeyPanel />
+        {keys && <QuestionInput />}
+      </div>
 
       <footer className="mt-10 text-xs text-muted-foreground">
         Your API keys live only in this browser. Encrypted at rest with
