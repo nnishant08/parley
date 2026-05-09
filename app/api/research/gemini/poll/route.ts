@@ -151,6 +151,10 @@ export async function POST(req: NextRequest) {
     const status = interaction.status;
     const steps = (interaction as unknown as { steps?: StepBase[] }).steps;
     const { text, sources, searchQueries, searchCount } = extractProgress(steps);
+    // eslint-disable-next-line no-console
+    console.log(
+      `[proxy/gemini/poll] ${interactionId.slice(-16)} status=${status} steps=${steps?.length ?? 0} searches=${searchCount} chars=${text.length}`,
+    );
 
     if (status === "completed") {
       // eslint-disable-next-line no-console

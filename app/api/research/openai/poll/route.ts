@@ -116,6 +116,10 @@ export async function POST(req: NextRequest) {
     const { text, sources, searchQueries, searchCount } = extractProgress(
       resp.output as OutputItem[] | undefined,
     );
+    // eslint-disable-next-line no-console
+    console.log(
+      `[proxy/openai/poll] ${responseId.slice(-12)} status=${status} searches=${searchCount} chars=${text.length}`,
+    );
 
     if (status === "completed") {
       // eslint-disable-next-line no-console
