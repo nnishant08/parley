@@ -189,13 +189,11 @@ export default function RunPage() {
     }
   }, [runId, keys]);
 
-  if (!hydrated) {
-    return (
-      <main className="container mx-auto max-w-5xl px-6 py-16 text-sm text-muted-foreground">
-        Loading…
-      </main>
-    );
-  }
+  // NOTE: every useEffect on this page must appear ABOVE the early
+  // returns below. React requires identical hook-call ordering across
+  // renders; an early return in the middle that skips later
+  // useEffects throws "Rendered more hooks than during the previous
+  // render" the moment the gate flips.
 
   // Critique auto-fire: once every wired-up provider has reached a
   // terminal state (done OR failed), kick off the critique pass for
@@ -333,6 +331,16 @@ export default function RunPage() {
       },
     });
   }, [stageTwoTerminal, runId, keys, run]);
+
+  // ---- early returns (must come AFTER all hooks above) ----
+
+  if (!hydrated) {
+    return (
+      <main className="container mx-auto max-w-5xl px-6 py-16 text-sm text-muted-foreground">
+        Loading…
+      </main>
+    );
+  }
 
   if (!run || run.id !== runId) {
     return (
