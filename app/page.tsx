@@ -1,6 +1,8 @@
+import { KeyPanel } from "@/components/KeyPanel";
+
 export default function HomePage() {
   return (
-    <main className="container mx-auto max-w-4xl px-6 py-16">
+    <main className="container mx-auto max-w-3xl px-6 py-16">
       <header className="mb-10">
         <h1 className="text-3xl font-semibold tracking-tight">
           Parallel Research
@@ -11,11 +13,13 @@ export default function HomePage() {
         </p>
       </header>
 
-      <section className="rounded-lg border border-border bg-card p-6">
-        <p className="text-sm text-muted-foreground">
-          Scaffold ready. Key panel and research input come next.
-        </p>
-      </section>
+      <KeyPanel />
+
+      <footer className="mt-10 text-xs text-muted-foreground">
+        Your API keys live only in this browser. Encrypted at rest with
+        AES-GCM. Sent over HTTPS straight to each provider as a bearer
+        token, then discarded.
+      </footer>
     </main>
   );
 }
