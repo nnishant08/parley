@@ -5,13 +5,27 @@ import {
   AlertTriangle,
   Loader2,
   ScrollText,
+  ExternalLink,
 } from "lucide-react";
 import { Markdown } from "@/components/Markdown";
-import type { SynthesisState } from "@/lib/store";
-import { PROVIDER_LABEL, type Provider } from "@/lib/types";
+import type { ProviderRun, SynthesisState } from "@/lib/store";
+import { PROVIDER_LABEL, PROVIDERS, type Provider } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
-export function FinalReport({ state }: { state: SynthesisState }) {
+const ACCENT_DOT: Record<Provider, string> = {
+  anthropic: "bg-anthropic",
+  openai: "bg-openai",
+  gemini: "bg-gemini",
+  mistral: "bg-mistral",
+};
+
+export function FinalReport({
+  state,
+  providers,
+}: {
+  state: SynthesisState;
+  providers: Partial<Record<Provider, ProviderRun>>;
+}) {
   const { status, markdown, error, synthesizer } = state;
 
   return (
@@ -56,6 +70,9 @@ export function FinalReport({ state }: { state: SynthesisState }) {
           </>
         )}
       </div>
+
+      <RawAnswers providers={providers} />
+      <CombinedSources providers={providers} />
     </section>
   );
 }
@@ -82,5 +99,131 @@ function StatusPill({ status }: { status: SynthesisState["status"] }) {
     <span className="flex items-center gap-1 text-xs text-destructive">
       <AlertTriangle className={cls} /> Failed
     </span>
+  );
+}
+
+function RawAnswers({
+  providers,
+}: {
+  providers: Partial<Record<Provider, ProviderRun>>;
+}) {
+  const withReports = PROVIDERS.filter(
+    (p) => providers[p]?.markdown && providers[p]!.markdown.length > 0,
+  );
+  if (withReports.length === 0) return null;
+
+  return (
+    <div className="border-t border-border px-6 py-5">
+      <details>
+        <summary className="cursor-pointer text-sm font-medium text-muted-foreground hover:text-foreground">
+          Per-model raw answers ({withReports.length})
+        </summary>
+        <div className="mt-4 space-y-4">
+          {withReports.map((p) => {
+            const run = providers[p]!;
+            return (
+              <details
+                key={p}
+                className="rounded-md border border-border bg-background/40"
+              >
+                <summary className="flex cursor-pointer items-center gap-2 px-4 py-3 text-sm font-medium hover:bg-accent/40">
+                  <span className={cn("h-2 w-2 rounded-full", ACCENT_DOT[p])} />
+                  {PROVIDER_LABEL[p]}
+                  <span className="ml-auto text-xs text-muted-foreground">
+                    {run.markdown.length.toLocaleString()} chars ·{" "}
+                    {run.sources.length} source
+                    {run.sources.length === 1 ? "" : "s"}
+                  </span>
+                </summary>
+                <div className="border-t border-border px-4 py-3">
+                  <Markdown>{run.markdown}</Markdown>
+                </div>
+              </details>
+            );
+          })}
+        </div>
+      </details>
+    </div>
+  );
+}
+
+function CombinedSources({
+  providers,
+}: {
+  providers: Partial<Record<Provider, ProviderRun>>;
+}) {
+  const map = new Map<
+    string,
+    { url: string; title?: string; citedBy: Set<Provider> }
+  >();
+  for (const p of PROVIDERS) {
+    const run = providers[p];
+    if (!run) continue;
+    for (const s of run.sources) {
+      const existing = map.get(s.url);
+      if (existing) {
+        existing.citedBy.add(p);
+        if (!existing.title && s.title) existing.title = s.title;
+      } else {
+        map.set(s.url, {
+          url: s.url,
+          title: s.title,
+          citedBy: new Set([p]),
+        });
+      }
+    }
+  }
+  if (map.size === 0) return null;
+
+  // Sort: most-cited first (consensus signal), then alphabetical
+  const sorted = Array.from(map.values()).sort((a, b) => {
+    if (b.citedBy.size !== a.citedBy.size) return b.citedBy.size - a.citedBy.size;
+    return (a.title ?? a.url).localeCompare(b.title ?? b.url);
+  });
+
+  return (
+    <div className="border-t border-border px-6 py-5">
+      <details>
+        <summary className="cursor-pointer text-sm font-medium text-muted-foreground hover:text-foreground">
+          Combined sources ({sorted.length}) — deduplicated across all four
+          models
+        </summary>
+        <ul className="mt-3 divide-y divide-border rounded-md border border-border">
+          {sorted.map((s, i) => (
+            <li
+              key={i}
+              className="flex items-start gap-3 px-3 py-2 text-xs"
+            >
+              <div className="flex shrink-0 gap-1 pt-0.5">
+                {PROVIDERS.map((p) => (
+                  <span
+                    key={p}
+                    title={`${PROVIDER_LABEL[p]}${s.citedBy.has(p) ? " cited this" : " did not cite this"}`}
+                    className={cn(
+                      "h-1.5 w-1.5 rounded-full",
+                      s.citedBy.has(p)
+                        ? ACCENT_DOT[p]
+                        : "bg-muted opacity-30",
+                    )}
+                  />
+                ))}
+              </div>
+              <a
+                href={s.url}
+                target="_blank"
+                rel="noreferrer"
+                className="flex min-w-0 flex-1 items-start gap-1 text-sky-400 hover:underline"
+              >
+                <span className="truncate">{s.title || s.url}</span>
+                <ExternalLink className="mt-0.5 h-3 w-3 shrink-0 opacity-60" />
+              </a>
+              <span className="shrink-0 text-muted-foreground">
+                {s.citedBy.size}/4
+              </span>
+            </li>
+          ))}
+        </ul>
+      </details>
+    </div>
   );
 }

@@ -340,7 +340,7 @@ export default function RunPage() {
         })}
       </div>
 
-      <FinalReport state={run.synthesis} />
+      <FinalReport state={run.synthesis} providers={run.providers} />
     </main>
   );
 }
