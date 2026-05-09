@@ -14,6 +14,7 @@ import { runSynthesis } from "@/lib/providers/synthesis";
 import { FinalReport } from "@/components/FinalReport";
 import { ExportButtons } from "@/components/ExportButtons";
 import { FollowUpBox } from "@/components/FollowUpBox";
+import { ActualCost } from "@/components/CostEstimate";
 import {
   useKeyStore,
   useRunStore,
@@ -311,6 +312,7 @@ export default function RunPage() {
           Question
         </h2>
         <p className="mt-1 text-lg leading-snug">{run.question}</p>
+        <ActualCost run={run} />
       </header>
 
       <div className="grid gap-4 md:grid-cols-2">

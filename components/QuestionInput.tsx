@@ -14,6 +14,7 @@ import {
   FileText,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { PreRunCostEstimate } from "@/components/CostEstimate";
 
 const SUGGESTIONS = [
   "What does the latest research say about GLP-1s and cognition?",
@@ -198,6 +199,7 @@ export function QuestionInput() {
           )}
         </Button>
       </div>
+      <PreRunCostEstimate />
     </div>
   );
 }
