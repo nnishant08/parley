@@ -1,5 +1,5 @@
 import { create } from "zustand";
-import type { Provider, ProviderKeys, Source } from "@/lib/types";
+import type { Critique, Provider, ProviderKeys, Source } from "@/lib/types";
 import {
   clearEncryptedBlob,
   decryptKeys,
@@ -72,7 +72,9 @@ export type ProviderRunStatus =
   | "searching"
   | "writing"
   | "done"
-  | "failed";
+  | "failed"
+  | "critiquing"
+  | "critique_done";
 
 export interface ProviderRun {
   status: ProviderRunStatus;
@@ -101,6 +103,10 @@ export interface ResearchRun {
   // Track which providers have been kicked off so React Strict Mode's double-effect
   // doesn't fire two upstream calls per provider.
   launched: Partial<Record<Provider, boolean>>;
+  // Stage 2 — flat list of critiques (fromProvider X ofProvider).
+  critiques: Critique[];
+  // Per-provider flag — has this provider's critique pass been launched?
+  critiqueLaunched: Partial<Record<Provider, boolean>>;
 }
 
 interface RunStoreState {
@@ -120,6 +126,9 @@ interface RunStoreState {
   appendSources: (provider: Provider, sources: Source[]) => void;
   appendSearchQuery: (provider: Provider, query: string) => void;
   setError: (provider: Provider, error: string) => void;
+
+  markCritiqueLaunched: (provider: Provider) => boolean;
+  addCritiques: (critiques: Critique[]) => void;
 }
 
 function patchProvider(
@@ -146,6 +155,8 @@ export const useRunStore = create<RunStoreState>((set, get) => ({
         startedAt: Date.now(),
         providers: {},
         launched: {},
+        critiques: [],
+        critiqueLaunched: {},
       },
     });
   },
@@ -239,6 +250,27 @@ export const useRunStore = create<RunStoreState>((set, get) => ({
         error,
         endedAt: Date.now(),
       })),
+    });
+  },
+
+  markCritiqueLaunched: (provider) => {
+    const cur = get().current;
+    if (!cur) return false;
+    if (cur.critiqueLaunched[provider]) return false;
+    set({
+      current: {
+        ...cur,
+        critiqueLaunched: { ...cur.critiqueLaunched, [provider]: true },
+      },
+    });
+    return true;
+  },
+
+  addCritiques: (critiques) => {
+    const cur = get().current;
+    if (!cur) return;
+    set({
+      current: { ...cur, critiques: [...cur.critiques, ...critiques] },
     });
   },
 }));

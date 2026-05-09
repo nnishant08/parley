@@ -46,12 +46,13 @@ export async function POST(req: NextRequest) {
   }
 
   const model = tier === "o4-mini" ? ALT_MODEL : DEFAULT_MODEL;
-  // Bump retries from the SDK default of 2 → 6. Deep-research orgs
-  // routinely hit transient TPM caps (the prompt is ~30k tokens at
-  // ingestion); the SDK honors the upstream Retry-After header on
-  // 429s with exponential backoff, so this just rides them out
-  // instead of surfacing a flake to the user.
-  const client = new OpenAI({ apiKey, maxRetries: 6 });
+  // Bump retries from the SDK default of 2 → 10. Deep-research orgs
+  // routinely hit transient TPM caps (each call counts ~30k tokens
+  // against the per-minute limit, default 200k); the SDK honors the
+  // upstream Retry-After header with exponential backoff. Ten retries
+  // bridges ~30+ seconds of waiting which is usually enough to cross
+  // a minute boundary on a heavily-loaded org.
+  const client = new OpenAI({ apiKey, maxRetries: 10 });
 
   try {
     const resp = await client.responses.create({
@@ -84,13 +85,22 @@ export async function POST(req: NextRequest) {
   } catch (e) {
     // eslint-disable-next-line no-console
     console.error("[proxy/openai/start] OpenAI call failed:", e);
-    const message = e instanceof Error ? e.message : "OpenAI call failed";
-    // OpenAI's verified-org guard surfaces as a specific 403; pass that
-    // through clearly so the UI can render an actionable message.
-    const status =
+    const rawMessage = e instanceof Error ? e.message : "OpenAI call failed";
+    const upstreamStatus =
       typeof (e as { status?: number }).status === "number"
         ? (e as { status: number }).status
         : 502;
-    return Response.json({ error: message }, { status });
+
+    // If we still see a 429 after 10 retries, it's a sustained TPM
+    // saturation on the user's org — not a transient blip. Reword
+    // the message so the user knows it's a wait-it-out problem,
+    // not a config bug.
+    let message = rawMessage;
+    if (upstreamStatus === 429 || /rate limit reached|tokens per min/i.test(rawMessage)) {
+      message =
+        "OpenAI rate limit (TPM) — your org's o3-deep-research is over its tokens-per-minute cap. Each run uses ~30k tokens against your limit. Wait ~60s before retrying, or upgrade your OpenAI tier. Original error: " +
+        rawMessage;
+    }
+    return Response.json({ error: message }, { status: upstreamStatus });
   }
 }

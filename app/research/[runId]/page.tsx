@@ -9,6 +9,7 @@ import { researchClaude, type RunEvent } from "@/lib/providers/anthropic";
 import { researchMistral } from "@/lib/providers/mistral";
 import { researchOpenAI } from "@/lib/providers/openai";
 import { researchGemini } from "@/lib/providers/gemini";
+import { runCritique, eligibleProviders } from "@/lib/providers/critique";
 import {
   useKeyStore,
   useRunStore,
@@ -142,6 +143,79 @@ export default function RunPage() {
     );
   }
 
+  // Critique auto-fire: once every wired-up provider has reached a
+  // terminal state (done OR failed), kick off the critique pass for
+  // each provider that succeeded. Each critique returns up to 3
+  // critiques (one per other model) which we append to the run's
+  // flat critiques list.
+  //
+  // Watch only the count of terminal providers, not the run object,
+  // to avoid re-firing during in-progress polls.
+  const stageOneStates = run
+    ? PROVIDERS.filter((p) => RUNNERS[p]).map(
+        (p) => run.providers[p]?.status ?? "idle",
+      )
+    : [];
+  const stageOneTerminal =
+    stageOneStates.length > 0 &&
+    stageOneStates.every((s) => s === "done" || s === "failed");
+
+  useEffect(() => {
+    if (!stageOneTerminal) return;
+    if (!keys || !run) return;
+
+    const cur = useRunStore.getState().current;
+    if (!cur || cur.id !== runId) return;
+
+    // Build the per-provider report list for any "done" providers
+    const reports: Array<{ provider: Provider; markdown: string }> = [];
+    for (const p of PROVIDERS) {
+      if (!RUNNERS[p]) continue;
+      const pr = cur.providers[p];
+      if (pr?.status === "done") {
+        reports.push({ provider: p, markdown: pr.markdown });
+      }
+    }
+    const eligible = eligibleProviders(
+      Object.fromEntries(
+        reports.map((r) => [r.provider, "done"] as const),
+      ) as Partial<Record<Provider, "done">>,
+      keys,
+    );
+    if (eligible.length < 2) return; // spec: >=2 required to proceed
+
+    const store = useRunStore.getState();
+
+    for (const fromProvider of eligible) {
+      if (!store.markCritiqueLaunched(fromProvider)) continue;
+      store.setStatus(fromProvider, "critiquing");
+
+      const ownReport =
+        reports.find((r) => r.provider === fromProvider)?.markdown ?? "";
+      const others = reports.filter((r) => r.provider !== fromProvider);
+
+      void (async () => {
+        const { critiques, error } = await runCritique({
+          fromProvider,
+          question: cur.question,
+          ownReport,
+          others,
+          apiKey: keys[fromProvider],
+        });
+        if (useRunStore.getState().current?.id !== runId) return;
+        const s = useRunStore.getState();
+        if (critiques.length) s.addCritiques(critiques);
+        if (error) {
+          // Critique failure is non-fatal; mark critique_done with the
+          // error in detail so the user can see what went wrong.
+          s.setStatus(fromProvider, "critique_done", `critique error: ${error}`);
+        } else {
+          s.setStatus(fromProvider, "critique_done");
+        }
+      })();
+    }
+  }, [stageOneTerminal, runId, keys, run]);
+
   if (!run || run.id !== runId) {
     return (
       <main className="container mx-auto max-w-5xl px-6 py-16 text-sm text-muted-foreground">
@@ -187,12 +261,14 @@ export default function RunPage() {
               </section>
             );
           }
+          const received = run.critiques.filter((c) => c.ofProvider === p);
           return (
             <ModelCard
               key={p}
               provider={p}
               run={run.providers[p] ?? EMPTY_RUN}
               approximated={APPROXIMATED[p]}
+              critiquesReceived={received}
             />
           );
         })}

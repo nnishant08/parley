@@ -1,9 +1,17 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { Loader2, CheckCircle2, AlertTriangle, Search, FileText, Sparkles } from "lucide-react";
+import {
+  Loader2,
+  CheckCircle2,
+  AlertTriangle,
+  Search,
+  FileText,
+  Sparkles,
+  MessageSquareWarning,
+} from "lucide-react";
 import { Markdown } from "@/components/Markdown";
-import type { Provider } from "@/lib/types";
+import type { Critique, Provider } from "@/lib/types";
 import { PROVIDER_LABEL } from "@/lib/types";
 import type { ProviderRun, ProviderRunStatus } from "@/lib/store";
 import { cn } from "@/lib/utils";
@@ -29,6 +37,8 @@ const STATUS_LABEL: Record<ProviderRunStatus, string> = {
   writing: "Writing",
   done: "Done",
   failed: "Failed",
+  critiquing: "Critiquing",
+  critique_done: "Critique done",
 };
 
 function StatusIcon({ status }: { status: ProviderRunStatus }) {
@@ -46,6 +56,10 @@ function StatusIcon({ status }: { status: ProviderRunStatus }) {
       return <CheckCircle2 className={cn(cls, "text-emerald-500")} />;
     case "failed":
       return <AlertTriangle className={cn(cls, "text-destructive")} />;
+    case "critiquing":
+      return <MessageSquareWarning className={cn(cls, "animate-pulse text-violet-400")} />;
+    case "critique_done":
+      return <CheckCircle2 className={cn(cls, "text-violet-400")} />;
   }
 }
 
@@ -67,10 +81,12 @@ export function ModelCard({
   provider,
   run,
   approximated,
+  critiquesReceived,
 }: {
   provider: Provider;
   run: ProviderRun;
   approximated?: boolean;
+  critiquesReceived?: Critique[];
 }) {
   const elapsed = useElapsed(run.startedAt, run.endedAt);
 
@@ -158,6 +174,49 @@ export function ModelCard({
           </ul>
         </details>
       )}
+
+      {critiquesReceived && critiquesReceived.length > 0 && (
+        <details className="mt-4 group">
+          <summary className="cursor-pointer text-xs text-violet-300 hover:text-violet-200">
+            Critiques received ({critiquesReceived.length})
+          </summary>
+          <div className="mt-2 space-y-3">
+            {critiquesReceived.map((c, i) => (
+              <CritiqueBlock key={i} critique={c} />
+            ))}
+          </div>
+        </details>
+      )}
     </section>
+  );
+}
+
+function CritiqueBlock({ critique }: { critique: Critique }) {
+  const sections: Array<{ label: string; items: string[]; color: string }> = [
+    { label: "Errors", items: critique.errors, color: "text-rose-300" },
+    { label: "Disagreements", items: critique.disagreements, color: "text-amber-300" },
+    { label: "Missed points", items: critique.missedPoints, color: "text-sky-300" },
+    { label: "Agreements", items: critique.agreements, color: "text-emerald-300" },
+  ];
+  return (
+    <div className="rounded-md border border-border bg-background/40 p-3">
+      <div className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+        From {PROVIDER_LABEL[critique.fromProvider]}
+      </div>
+      {sections.map((s) =>
+        s.items.length > 0 ? (
+          <div key={s.label} className="mt-2">
+            <div className={cn("text-[11px] font-semibold", s.color)}>
+              {s.label}
+            </div>
+            <ul className="mt-1 list-disc space-y-0.5 pl-4 text-xs leading-relaxed text-foreground/90">
+              {s.items.map((it, j) => (
+                <li key={j}>{it}</li>
+              ))}
+            </ul>
+          </div>
+        ) : null,
+      )}
+    </div>
   );
 }
