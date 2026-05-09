@@ -9,7 +9,9 @@ import {
   FileText,
   Sparkles,
   MessageSquareWarning,
+  RotateCcw,
 } from "lucide-react";
+import { Button } from "@/components/ui/button";
 import { Markdown } from "@/components/Markdown";
 import type { Critique, Provider } from "@/lib/types";
 import { PROVIDER_LABEL } from "@/lib/types";
@@ -82,11 +84,13 @@ export function ModelCard({
   run,
   approximated,
   critiquesReceived,
+  onRetry,
 }: {
   provider: Provider;
   run: ProviderRun;
   approximated?: boolean;
   critiquesReceived?: Critique[];
+  onRetry?: (provider: Provider) => void;
 }) {
   const elapsed = useElapsed(run.startedAt, run.endedAt);
 
@@ -120,10 +124,24 @@ export function ModelCard({
         </p>
       )}
 
-      {run.status === "failed" && run.error && (
-        <p className="mt-3 rounded-md bg-destructive/10 px-3 py-2 text-xs text-destructive">
-          {run.error}
-        </p>
+      {run.status === "failed" && (
+        <div className="mt-3 space-y-2">
+          {run.error && (
+            <p className="rounded-md bg-destructive/10 px-3 py-2 text-xs text-destructive">
+              {run.error}
+            </p>
+          )}
+          {onRetry && (
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => onRetry(provider)}
+            >
+              <RotateCcw className="h-3.5 w-3.5" />
+              Retry
+            </Button>
+          )}
+        </div>
       )}
 
       {run.markdown && (

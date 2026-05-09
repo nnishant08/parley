@@ -150,6 +150,9 @@ interface RunStoreState {
   markCritiqueLaunched: (provider: Provider) => boolean;
   addCritiques: (critiques: Critique[]) => void;
 
+  /** Reset a single provider's state so it can be re-launched. */
+  resetProvider: (provider: Provider) => void;
+
   markSynthesisLaunched: (synthesizer: Provider) => boolean;
   setSynthesisStatus: (status: SynthesisStatus, error?: string) => void;
   appendSynthesisMarkdown: (delta: string) => void;
@@ -298,6 +301,22 @@ export const useRunStore = create<RunStoreState>((set, get) => ({
     if (!cur) return;
     set({
       current: { ...cur, critiques: [...cur.critiques, ...critiques] },
+    });
+  },
+
+  resetProvider: (provider) => {
+    const cur = get().current;
+    if (!cur) return;
+    const { [provider]: _drop, ...remainingLaunched } = cur.launched;
+    void _drop;
+    const { [provider]: _drop2, ...remainingProviders } = cur.providers;
+    void _drop2;
+    set({
+      current: {
+        ...cur,
+        providers: remainingProviders,
+        launched: remainingLaunched,
+      },
     });
   },
 

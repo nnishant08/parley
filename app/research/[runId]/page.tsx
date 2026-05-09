@@ -78,6 +78,55 @@ export default function RunPage() {
     }
   }, [hydrated, runIdActual, runId, router]);
 
+  function handleRetry(provider: Provider) {
+    if (!keys?.[provider] || !run) return;
+    useRunStore.getState().resetProvider(provider);
+    // Re-launch by directly invoking the runner. (We can't just bump the
+    // launchTick because resetProvider clears the launched flag, but
+    // the launch effect's deps are [runId, keys] which haven't changed
+    // — so we kick it manually here.)
+    const runner = RUNNERS[provider];
+    if (!runner) return;
+    const cur = useRunStore.getState().current;
+    if (!cur || cur.id !== runId) return;
+
+    const store = useRunStore.getState();
+    if (!store.markLaunched(provider)) return;
+    store.initProvider(provider);
+    store.setStatus(provider, "planning");
+
+    const startedForRunId = runId;
+    const isStillCurrent = () =>
+      useRunStore.getState().current?.id === startedForRunId;
+
+    void runner({
+      question: cur.question,
+      apiKey: keys[provider]!,
+      contextDocs: cur.contextDocs,
+      onEvent: (e) => {
+        if (!isStillCurrent()) return;
+        const s = useRunStore.getState();
+        switch (e.type) {
+          case "status":
+            if (e.status) s.setStatus(provider, e.status, e.detail);
+            break;
+          case "text_delta":
+            if (e.textDelta) s.appendMarkdown(provider, e.textDelta);
+            break;
+          case "search_query":
+            if (e.query) s.appendSearchQuery(provider, e.query);
+            break;
+          case "search_results":
+            if (e.sources?.length) s.appendSources(provider, e.sources);
+            break;
+          case "error":
+            if (e.error) s.setError(provider, e.error);
+            break;
+        }
+      },
+    });
+  }
+
   // Kick off all wired-up providers exactly once per (runId, keys) pair.
   //
   // Two subtle traps that bit me on step 3, both still relevant here:
@@ -339,6 +388,7 @@ export default function RunPage() {
               run={run.providers[p] ?? EMPTY_RUN}
               approximated={APPROXIMATED[p]}
               critiquesReceived={received}
+              onRetry={handleRetry}
             />
           );
         })}
