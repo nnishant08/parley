@@ -13,6 +13,7 @@ import { runCritique, eligibleProviders } from "@/lib/providers/critique";
 import { runSynthesis } from "@/lib/providers/synthesis";
 import { FinalReport } from "@/components/FinalReport";
 import { ExportButtons } from "@/components/ExportButtons";
+import { FollowUpBox } from "@/components/FollowUpBox";
 import {
   useKeyStore,
   useRunStore,
@@ -343,6 +344,14 @@ export default function RunPage() {
 
       <FinalReport state={run.synthesis} providers={run.providers} />
       <ExportButtons run={run} />
+
+      {run.synthesis.status === "done" && run.synthesis.markdown && (
+        <FollowUpBox
+          originalQuestion={run.question}
+          finalReport={run.synthesis.markdown}
+          synthesizer={run.synthesis.synthesizer ?? "anthropic"}
+        />
+      )}
     </main>
   );
 }
